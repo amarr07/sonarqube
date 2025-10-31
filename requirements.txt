@@ -1,0 +1,14 @@
+# Python dependencies for SonarQube Repository Analyzer
+
+# HTTP requests library for SonarQube API
+requests>=2.31.0
+
+# CLI framework
+click>=8.1.0
+
+# AWS S3 integration
+boto3>=1.28.0
+
+# Additional recommended packages
+urllib3>=2.0.0
+certifi>=2023.7.22
