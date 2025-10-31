@@ -59,8 +59,15 @@ Initialize `mcphub.json` configuration file. Prompts for:
 Analyze repository with SonarQube and push to S3.
 - Reads from `mcphub.json` if available
 - Runs full security analysis
+- **Discovers MCP tools** automatically from code
 - Saves reports locally
-- Pushes metadata to S3
+- Pushes metadata to S3 (including tool count and names)
+
+Tool Discovery:
+- Automatically scans repository for MCP tool definitions
+- Supports Python decorators (`@server.call_tool`, `@mcp.tool`)
+- Extracts tool names and counts them
+- Adds to S3 metadata
 
 Options:
 - `--name` - Server name (optional if mcphub.json exists)

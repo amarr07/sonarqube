@@ -7,6 +7,7 @@ import platform
 from pathlib import Path
 from . import sonarqube
 from . import s3_handler
+from . import tool_discovery
 
 def get_vscode_mcp_path():
     """Get VS Code mcp.json path based on operating system"""
@@ -243,6 +244,27 @@ def push(name, bucket, force):
         
         report_data = result['report_data']
         
+        click.echo("\n🔍 Discovering tools in repository...")
+        
+        import tempfile
+        temp_dir = tempfile.mkdtemp(prefix="mcphub_tools_")
+        try:
+            repo_clone_path = os.path.join(temp_dir, "repo")
+            if sonarqube.clone_repository(repo_url, repo_clone_path):
+                tool_info = tool_discovery.discover_tools_from_repo(repo_clone_path)
+                if tool_info['tool_count'] > 0:
+                    click.echo(f"   ✅ Discovered {tool_info['tool_count']} tools: {', '.join(tool_info['tool_names'][:5])}")
+                    if len(tool_info['tool_names']) > 5:
+                        click.echo(f"      ... and {len(tool_info['tool_names']) - 5} more")
+                else:
+                    click.echo("   ℹ️  No tools discovered")
+            else:
+                tool_info = {"tool_count": 0, "tool_names": []}
+                click.echo("   ⚠️  Could not discover tools (clone failed)")
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        
         from datetime import datetime
         current_time = datetime.now().astimezone().isoformat()
         
@@ -257,6 +279,10 @@ def push(name, bucket, force):
             "repository": {
                 "type": "git",
                 "url": repo_url
+            },
+            "tools": {
+                "count": tool_info['tool_count'],
+                "names": tool_info['tool_names']
             },
             "meta": {
                 "created_at": current_time,
