@@ -8,6 +8,139 @@ from pathlib import Path
 from . import sonarqube
 from . import s3_handler
 from . import tool_discovery
+from . import ggshield
+from . import bandit
+
+def create_security_report(repo_name, repo_url, sonarqube_data, ggshield_result, bandit_result):
+    """Create a unified security report combining all scanner results"""
+    from datetime import datetime
+    
+    unified_report = {
+        "metadata": {
+            "repository": repo_name,
+            "repo_url": repo_url,
+            "scan_date": datetime.now().isoformat(),
+            "scanners_used": ["SonarQube/SonarCloud", "GitGuardian ggshield", "Bandit"]
+        },
+        "summary": {
+            "total_issues_all_scanners": (
+                sonarqube_data.get('issue_counts', {}).get('total', 0) +
+                ggshield_result.get('total_secrets', 0) +
+                bandit_result.get('total_issues', 0)
+            ),
+            "critical_issues": 0,
+            "sonarcloud_url": sonarqube_data.get('metadata', {}).get('sonarcloud_url', ''),
+            "scan_passed": (
+                sonarqube_data.get('issue_counts', {}).get('total', 0) == 0 and
+                ggshield_result.get('total_secrets', 0) == 0 and
+                bandit_result.get('total_issues', 0) == 0
+            )
+        },
+        "sonarqube": {
+            "total_issues": sonarqube_data.get('issue_counts', {}).get('total', 0),
+            "bugs": sonarqube_data.get('issue_counts', {}).get('bugs', 0),
+            "vulnerabilities": sonarqube_data.get('issue_counts', {}).get('vulnerabilities', 0),
+            "code_smells": sonarqube_data.get('issue_counts', {}).get('code_smells', 0),
+            "security_hotspots": sonarqube_data.get('issue_counts', {}).get('security_hotspots', 0),
+            "quality_gate": sonarqube_data.get('quality_gate', {}).get('status', 'N/A'),
+            "reliability_rating": sonarqube_data.get('quality_ratings', {}).get('reliability', 'N/A'),
+            "security_rating": sonarqube_data.get('quality_ratings', {}).get('security', 'N/A'),
+            "maintainability_rating": sonarqube_data.get('quality_ratings', {}).get('maintainability', 'N/A'),
+            "coverage": sonarqube_data.get('metrics', {}).get('coverage', 0),
+            "duplications": sonarqube_data.get('metrics', {}).get('duplicated_lines_density', 0),
+            "lines_of_code": sonarqube_data.get('metrics', {}).get('ncloc', 0)
+        },
+        "gitguardian": {
+            "scan_passed": ggshield_result.get('success', False),
+            "total_secrets": ggshield_result.get('total_secrets', 0),
+            "secrets": ggshield_result.get('secrets', []),
+            "error": ggshield_result.get('error')
+        },
+        "bandit": {
+            "scan_passed": bandit_result.get('success', False),
+            "total_issues": bandit_result.get('total_issues', 0),
+            "severity_counts": bandit_result.get('severity_counts', {}),
+            "total_lines_scanned": bandit_result.get('total_lines_scanned', 0),
+            "issues": bandit_result.get('issues', []),
+            "error": bandit_result.get('error')
+        },
+        "recommendations": []
+    }
+    
+    sonar_issues = sonarqube_data.get('issue_counts', {}).get('total', 0)
+    secrets = ggshield_result.get('total_secrets', 0)
+    bandit_issues = bandit_result.get('total_issues', 0)
+    high_severity = bandit_result.get('severity_counts', {}).get('high', 0)
+    coverage = sonarqube_data.get('metrics', {}).get('coverage', 0)
+    
+    try:
+        coverage = float(coverage) if coverage else 0
+    except (ValueError, TypeError):
+        coverage = 0
+    
+    if sonar_issues > 5 or secrets > 0 or high_severity > 0:
+        unified_report["recommendations"].append("Critical security issues found - immediate action required")
+    if secrets > 0:
+        unified_report["recommendations"].append("Secrets detected - rotate credentials immediately")
+    if bandit_issues > 0:
+        unified_report["recommendations"].append("Security vulnerabilities found - review and fix")
+    if high_severity > 0:
+        unified_report["recommendations"].append("High-severity issues detected - prioritize fixes")
+    if coverage < 80:
+        unified_report["recommendations"].append("Code coverage below 80% - add more tests")
+    if len(unified_report["recommendations"]) == 0:
+        unified_report["recommendations"].append("All security scans passed - good job!")
+    
+    return unified_report
+
+def print_security_summary(security_report):
+    """Print a summary of the security report"""
+    click.echo("\n" + "=" * 70)
+    click.echo("📊 SECURITY SCAN SUMMARY")
+    click.echo("=" * 70)
+    
+    total_issues = security_report['summary']['total_issues_all_scanners']
+    if total_issues == 0:
+        click.echo("\n🎯 Overall Status: ✅ ALL SCANS PASSED")
+    else:
+        click.echo(f"\n🎯 Overall Status: ⚠️  {total_issues} TOTAL ISSUES FOUND")
+    
+    click.echo("\n" + "-" * 70)
+    click.echo("📋 Scanner Breakdown:")
+    click.echo("-" * 70)
+    
+    click.echo("\n1️⃣  SonarQube/SonarCloud:")
+    click.echo(f"   Total Issues: {security_report['sonarqube']['total_issues']}")
+    click.echo(f"   🐛 Bugs: {security_report['sonarqube']['bugs']}")
+    click.echo(f"   🔒 Vulnerabilities: {security_report['sonarqube']['vulnerabilities']}")
+    click.echo(f"   💨 Code Smells: {security_report['sonarqube']['code_smells']}")
+    click.echo(f"   🔐 Security Hotspots: {security_report['sonarqube']['security_hotspots']}")
+    
+    click.echo("\n2️⃣  GitGuardian (ggshield):")
+    if security_report['gitguardian']['scan_passed']:
+        click.echo("   ✅ No secrets detected")
+    else:
+        secrets = security_report['gitguardian']['total_secrets']
+        click.echo(f"   ⚠️  {secrets} secret(s) found")
+        if security_report['gitguardian']['error']:
+            click.echo(f"   Error: {security_report['gitguardian']['error']}")
+    
+    click.echo("\n3️⃣  Bandit (Python Security):")
+    if security_report['bandit']['scan_passed']:
+        click.echo("   ✅ No security issues detected")
+    else:
+        issues = security_report['bandit']['total_issues']
+        severity = security_report['bandit']['severity_counts']
+        click.echo(f"   ⚠️  {issues} issue(s) found")
+        click.echo(f"   High: {severity.get('high', 0)} | Medium: {severity.get('medium', 0)} | Low: {severity.get('low', 0)}")
+    
+    click.echo("\n" + "-" * 70)
+    click.echo("💡 Recommendations:")
+    click.echo("-" * 70)
+    for rec in security_report['recommendations']:
+        click.echo(f"   {rec}")
+    
+    click.echo("\n" + "=" * 70 + "\n")
 
 def get_vscode_mcp_path():
     """Get VS Code mcp.json path based on operating system"""
@@ -247,7 +380,8 @@ def push(name, bucket, force):
         click.echo("\n🔍 Discovering tools in repository...")
         
         import tempfile
-        temp_dir = tempfile.mkdtemp(prefix="mcphub_tools_")
+        import shutil
+        temp_dir = tempfile.mkdtemp(prefix="mcphub_scan_")
         try:
             repo_clone_path = os.path.join(temp_dir, "repo")
             if sonarqube.clone_repository(repo_url, repo_clone_path):
@@ -258,11 +392,45 @@ def push(name, bucket, force):
                         click.echo(f"      ... and {len(tool_info['tool_names']) - 5} more")
                 else:
                     click.echo("   ℹ️  No tools discovered")
+                
+                owner, repo = sonarqube.extract_repo_name(repo_url)
+                repo_name = f"{owner}_{repo}" if owner and repo else name
+                
+                click.echo("\n🔐 Running additional security scanners...")
+                
+                click.echo("\n🔒 Running GitGuardian Secret Scan...")
+                ggshield_result = ggshield.run_ggshield_scan(repo_clone_path)
+                if ggshield_result.get('success'):
+                    click.echo("   ✅ GitGuardian: No secrets detected")
+                elif 'error' in ggshield_result:
+                    click.echo(f"   ⚠️  GitGuardian: {ggshield_result['error']}")
+                else:
+                    click.echo(f"   ⚠️  GitGuardian: {ggshield_result.get('total_secrets', 0)} secret(s) detected")
+                
+                click.echo("\n🐍 Running Bandit Python Security Scan...")
+                bandit_result = bandit.run_bandit_scan(repo_clone_path)
+                if bandit_result.get('success'):
+                    click.echo("   ✅ Bandit: No security issues found")
+                elif 'error' in bandit_result:
+                    click.echo(f"   ⚠️  Bandit: {bandit_result['error']}")
+                else:
+                    click.echo(f"   ⚠️  {bandit_result.get('total_issues', 0)} security issue(s) detected")
+                    click.echo(f"   ⚠️  Bandit: {bandit_result.get('total_issues', 0)} issue(s) detected")
+                
+                click.echo("\n📊 Generating security report...")
+                security_report = create_security_report(
+                    repo_name, repo_url, 
+                    result['report_data'], 
+                    ggshield_result, 
+                    bandit_result
+                )
+                
+                print_security_summary(security_report)
             else:
                 tool_info = {"tool_count": 0, "tool_names": []}
+                security_report = None
                 click.echo("   ⚠️  Could not discover tools (clone failed)")
         finally:
-            import shutil
             shutil.rmtree(temp_dir, ignore_errors=True)
         
         from datetime import datetime
@@ -284,6 +452,7 @@ def push(name, bucket, force):
                 "count": tool_info['tool_count'],
                 "names": tool_info['tool_names']
             },
+            "security_report": security_report,
             "meta": {
                 "created_at": current_time,
                 "updated_at": current_time
@@ -291,7 +460,8 @@ def push(name, bucket, force):
         }
         
         if config and 'pricing' in config:
-            click.echo("\n💡 Note: Pricing information is stored locally only, not pushed to S3")
+            server_entry['pricing'] = config['pricing']
+            click.echo(f"\n� Pricing information included: {config['pricing']}")
         
         click.echo(f"\n📤 Pushing server entry to S3 bucket '{bucket}'...")
         
@@ -300,10 +470,9 @@ def push(name, bucket, force):
         click.echo("\n" + "=" * 70)
         click.echo("✅ Success!")
         click.echo("=" * 70)
-        click.echo(f"\n✅ Server '{name}' has been added to S3 mcp.json")
-        click.echo(f"✅ SonarQube analysis saved locally: {result['report_file']}")
-        click.echo(f"✅ View analysis in SonarCloud: {report_data['metadata']['sonarcloud_url']}")
-        click.echo(f"\n💡 Note: SonarQube data is saved in local reports, not pushed to S3")
+        click.echo(f"\n✅ Server '{name}' has been pushed to S3 with complete security report")
+        click.echo(f"✅ View in SonarCloud: {report_data['metadata']['sonarcloud_url']}")
+        click.echo("\n💡 All data (including security scans) is now in S3 - no local files created")
         
     except Exception as e:
         click.echo(f"\n❌ Error: {str(e)}")

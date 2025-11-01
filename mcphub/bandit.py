@@ -1,47 +1,139 @@
-"""
-Bandit Security Scanner - Python Code Security Analysis
-========================================================
-Scans GitHub repositories for security vulnerabilities using Bandit.
-Fetches repository information from S3 bucket (mcp.json) and performs security analysis.
-
-Requirements:
-- boto3 (AWS S3 access)
-- bandit (Security scanning)
-- GitPython (Git operations)
-- python-dotenv (Environment variables)
-
-Environment Variables (.env):
-- AWS_ACCESS_KEY_ID: AWS access key
-- AWS_SECRET_ACCESS_KEY: AWS secret key
-- AWS_REGION: AWS region (default: us-east-1)
-- S3_BUCKET_NAME: S3 bucket containing mcp.json
-- S3_MCP_JSON_KEY: Path to mcp.json in S3 bucket
-- GITHUB_TOKEN: (Optional) For private repositories
-"""
-
 import os
-import sys
 import json
-import shutil
-import tempfile
 import subprocess
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+import tempfile
+import sys
 from datetime import datetime
+from typing import Dict, Optional, List
 
-# Third-party imports
-try:
-    import boto3
-    from git import Repo
-    from dotenv import load_dotenv
-except ImportError as e:
-    print(f"❌ Missing required dependency: {e}")
-    print("Install dependencies: pip install boto3 bandit GitPython python-dotenv")
-    sys.exit(1)
+def run_bandit_scan(repo_path):
+    """
+    Run Bandit security scan on a Python repository
+    
+    Args:
+        repo_path: Path to the repository to scan
+        
+    Returns:
+        Dictionary with scan results
+    """
+    if not os.path.exists(repo_path):
+        return {
+            "success": False,
+            "error": "Repository path not found",
+            "total_issues": 0,
+            "severity_counts": {"high": 0, "medium": 0, "low": 0},
+            "issues": []
+        }
+    
+    try:
+        output_file = os.path.join(tempfile.gettempdir(), f"bandit_{datetime.now().timestamp()}.json")
+        
+        print(f"   Running Bandit scanner on: {repo_path}")
+        
+        result = subprocess.run(
+            ["bandit", "-r", repo_path, "-f", "json", "-o", output_file, "-ll"],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        if os.path.exists(output_file):
+            with open(output_file, 'r') as f:
+                bandit_data = json.load(f)
+            os.remove(output_file)
+            
+            issues = bandit_data.get("results", [])
+            metrics = bandit_data.get("metrics", {})
+            
+            severity_counts = {"high": 0, "medium": 0, "low": 0}
+            detailed_issues = []
+            
+            confidence_map = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
+            
+            for issue in issues:
+                severity = confidence_map.get(issue.get("issue_severity", "LOW").upper(), "low")
+                confidence = confidence_map.get(issue.get("issue_confidence", "LOW").upper(), "low")
+                
+                severity_counts[severity] += 1
+                
+                detailed_issues.append({
+                    "title": issue.get("issue_text", "Unknown"),
+                    "severity": severity,
+                    "confidence": confidence,
+                    "file": issue.get("filename", "Unknown"),
+                    "line_number": issue.get("line_number", 0),
+                    "test_id": issue.get("test_id", ""),
+                    "test_name": issue.get("test_name", ""),
+                    "cwe": issue.get("issue_cwe", {}).get("id") if isinstance(issue.get("issue_cwe"), dict) else 0
+                })
+            
+            severity_order = {"high": 0, "medium": 1, "low": 2}
+            detailed_issues.sort(key=lambda x: severity_order.get(x["severity"], 3))
+            
+            total_lines = sum(m.get("loc", 0) for m in metrics.values() if isinstance(m, dict))
+            
+            return {
+                "success": len(issues) == 0,
+                "total_issues": len(issues),
+                "severity_counts": severity_counts,
+                "total_lines_scanned": total_lines,
+                "issues": detailed_issues
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Bandit did not generate output",
+                "total_issues": 0,
+                "severity_counts": {"high": 0, "medium": 0, "low": 0},
+                "issues": []
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "error": "Scanner timeout",
+            "total_issues": 0,
+            "severity_counts": {"high": 0, "medium": 0, "low": 0},
+            "issues": []
+        }
+    except FileNotFoundError:
+        return {
+            "success": False,
+            "error": "Bandit not installed",
+            "total_issues": 0,
+            "severity_counts": {"high": 0, "medium": 0, "low": 0},
+            "issues": []
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "total_issues": 0,
+            "severity_counts": {"high": 0, "medium": 0, "low": 0},
+            "issues": []
+        }
 
-# Load environment variables
-load_dotenv()
+def save_bandit_report(repo_name, scan_result, repo_url):
+    """Save bandit scan report to file"""
+    os.makedirs("reports", exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_file = f"reports/bandit-{repo_name}-{timestamp}.json"
+    
+    report = {
+        "repository": repo_name,
+        "repo_url": repo_url,
+        "scan_date": datetime.now().isoformat(),
+        "scanner": "Bandit",
+        "result": scan_result
+    }
+    
+    with open(report_file, 'w') as f:
+        json.dump(report, f, indent=2)
+    
+    return report_file
 
+# Keep the old code below for backwards compatibility if needed
 # --- Configuration ---
 AWS_ACCESS_KEY = os.environ.get("AWS_ACCESS_KEY_ID")
 AWS_SECRET_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY")
